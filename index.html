@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Capture App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="bg-white p-6 rounded-xl shadow-lg max-w-md w-full space-y-4">
+        <h1 class="text-2xl font-bold text-center text-gray-800">Camera Capture</h1>
+        
+        <div class="mb-4">
+            <video id="videoPreview" 
+                   class="w-full rounded-lg bg-black" 
+                   autoplay 
+                   playsinline>
+                Your browser does not support video.
+            </video>
+        </div>
+
+        <div class="flex space-x-4">
+            <button id="startCamera" 
+                    class="flex-1 bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600 transition">
+                启动摄像头
+            </button>
+            <button id="capturePhoto" 
+                    class="flex-1 bg-green-500 text-white py-2 rounded-lg hover:bg-green-600 transition" 
+                    disabled>
+                拍摄照片
+            </button>
+        </div>
+
+        <canvas id="photoCanvas" class="hidden"></canvas>
+
+        <div id="photoPreview" class="hidden mb-4">
+            <img id="capturedImage" class="w-full rounded-lg" />
+        </div>
+
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">上传服务器URL</label>
+                <input type="text" id="uploadUrl" 
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200"
+                       placeholder="例如: http://192.168.1.100:8080/upload">
+            </div>
+
+            <button id="uploadPhoto" 
+                    class="w-full bg-purple-500 text-white py-2 rounded-lg hover:bg-purple-600 transition" 
+                    disabled>
+                上传照片
+            </button>
+        </div>
+
+        <div class="space-y-4 border-t pt-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Webhook URL</label>
+                <input type="text" id="webhookUrl" 
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200"
+                       placeholder="例如: http://192.168.1.100:8080/webhook">
+            </div>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Webhook payload (JSON)</label>
+                <textarea id="webhookPayload" 
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200"
+                       rows="3"
+                       placeholder='例如: {"status": "photo_uploaded", "message": "自定义消息"}'></textarea>
+            </div>
+
+            <button id="triggerWebhook" 
+                    class="w-full bg-indigo-500 text-white py-2 rounded-lg hover:bg-indigo-600 transition">
+                触发Webhook
+            </button>
+        </div>
+
+        <div id="status" class="mt-4 text-center text-gray-600"></div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const videoPreview = document.getElementById('videoPreview');
+        const startCameraBtn = document.getElementById('startCamera');
+        const capturePhotoBtn = document.getElementById('capturePhoto');
+        const photoCanvas = document.getElementById('photoCanvas');
+        const photoPreview = document.getElementById('photoPreview');
+        const capturedImage = document.getElementById('capturedImage');
+        const uploadPhotoBtn = document.getElementById('uploadPhoto');
+        const uploadUrlInput = document.getElementById('uploadUrl');
+        const webhookUrlInput = document.getElementById('webhookUrl');
+        const webhookPayloadInput = document.getElementById('webhookPayload');
+        const triggerWebhookBtn = document.getElementById('triggerWebhook');
+        const status = document.getElementById('status');
+
+        let stream = null;
+        let photoBlob = null;
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' } 
+                });
+                videoPreview.srcObject = stream;
+                startCameraBtn.disabled = true;
+                capturePhotoBtn.disabled = false;
+                status.textContent = '摄像头已启动';
+                photoPreview.classList.add('hidden');
+            } catch (error) {
+                console.error('摄像头启动失败:', error);
+                status.textContent = '无法访问摄像头，请检查权限';
+            }
+        }
+
+        function capturePhoto() {
+            const context = photoCanvas.getContext('2d');
+            photoCanvas.width = videoPreview.videoWidth;
+            photoCanvas.height = videoPreview.videoHeight;
+            context.drawImage(videoPreview, 0, 0);
+
+            photoCanvas.toBlob(blob => {
+                photoBlob = blob;
+                capturedImage.src = URL.createObjectURL(blob);
+                photoPreview.classList.remove('hidden');
+                uploadPhotoBtn.disabled = false;
+            }, 'image/jpeg', 0.95);
+        }
+
+        async function uploadPhoto() {
+            const uploadUrl = uploadUrlInput.value.trim();
+
+            if (!uploadUrl || !photoBlob) {
+                status.textContent = '请输入有效的上传地址并确保已拍摄照片';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('photo', photoBlob, 'selfie.jpg');
+
+            try {
+                status.textContent = '正在上传...';
+
+                const uploadResponse = await fetch(uploadUrl, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                status.textContent = '上传成功!';
+            } catch (error) {
+                console.error('上传失败:', error);
+                status.textContent = `上传失败: ${error.message}`;
+            }
+        }
+
+        async function triggerWebhook() {
+            const webhookUrl = webhookUrlInput.value.trim();
+            const webhookPayload = webhookPayloadInput.value.trim();
+
+            if (!webhookUrl) {
+                status.textContent = '请输入Webhook URL';
+                return;
+            }
+
+            try {
+                let payload = {};
+                if (webhookPayload) {
+                    try {
+                        payload = JSON.parse(webhookPayload);
+                    } catch (parseError) {
+                        status.textContent = 'Webhook payload必须是有效的JSON';
+                        return;
+                    }
+                }
+
+                status.textContent = '正在触发Webhook...';
+
+                const webhookResponse = await fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                status.textContent = 'Webhook调用成功!';
+            } catch (error) {
+                console.error('Webhook调用失败:', error);
+                status.textContent = `Webhook调用失败: ${error.message}`;
+            }
+        }
+
+        startCameraBtn.addEventListener('click', startCamera);
+        capturePhotoBtn.addEventListener('click', capturePhoto);
+        uploadPhotoBtn.addEventListener('click', uploadPhoto);
+        triggerWebhookBtn.addEventListener('click', triggerWebhook);
+    });
+    </script>
+</body>
+</html>
